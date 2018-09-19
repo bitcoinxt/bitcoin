@@ -37,12 +37,13 @@ class FullBlockTest(ComparisonTestFramework):
         self.block_time = int(time.time())+1
         self.tip = None
         self.blocks = {}
+        self.test = None
 
     def run_test(self):
-        test = TestManager(self, self.options.tmpdir)
-        test.add_all_connections(self.nodes)
+        self.test = TestManager(self, self.options.tmpdir)
+        self.test.add_all_connections(self.nodes)
         NetworkThread().start() # Start up network handling in another thread
-        test.run()
+        self.test.run()
 
     def add_transactions_to_block(self, block, tx_list):
         [ tx.rehash() for tx in tx_list ]
@@ -348,7 +349,16 @@ class FullBlockTest(ComparisonTestFramework):
         tx.vout = [CTxOut(0, script_output)]
         b24 = update_block(24, [tx])
         assert_equal(len(b24.serialize()), MAX_BLOCK_SIZE+1)
-        yield rejected(RejectResult(16, b'bad-blk-length'))
+        yield rejected() # Network sanity check will cause disconnect
+
+        # Reconnect
+        self.test.clear_all_connections()
+        self.test.wait_for_disconnections()
+        self.test.add_all_connections(self.nodes)
+        # Ignore requests for the oversize block
+        [n.inv_hash_ignore.append(b24.sha256) for n in self.test.test_nodes]
+        NetworkThread().start()
+        self.test.wait_for_verack()
 
         b25 = block(25, spend=out7)
         yield rejected()

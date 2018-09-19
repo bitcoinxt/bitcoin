@@ -127,6 +127,7 @@ if ENABLE_ZMQ:
     testScripts.append('zmq_test.py')
 
 testScriptsExt = [
+    'bip100-sizelimit.py',
     'bip9-softforks.py',
     'bip65-cltv.py',
     'bip65-cltv-p2p.py',

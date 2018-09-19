@@ -6,7 +6,10 @@
 #include "rpcclient.h"
 
 #include "base58.h"
+#include "main.h"
+#include "net.h"
 #include "netbase.h"
+#include "utilstrencodings.h"
 
 #include "test/test_bitcoin.h"
 
@@ -228,7 +231,7 @@ BOOST_AUTO_TEST_CASE(json_parse_errors)
 BOOST_AUTO_TEST_CASE(rpc_ban)
 {
     BOOST_CHECK_NO_THROW(CallRPC(string("clearbanned")));
-    
+
     UniValue r;
     BOOST_CHECK_NO_THROW(r = CallRPC(string("setban 127.0.0.0 add")));
     BOOST_CHECK_THROW(r = CallRPC(string("setban 127.0.0.0:8334")), runtime_error); //portnumber for setban not allowed
@@ -260,7 +263,7 @@ BOOST_AUTO_TEST_CASE(rpc_ban)
     adr = find_value(o1, "address");
     banned_until = find_value(o1, "banned_until");
     BOOST_CHECK_EQUAL(adr.get_str(), "127.0.0.0/24");
-    int64_t now = GetTime();    
+    int64_t now = GetTime();
     BOOST_CHECK(banned_until.get_int64() > now);
     BOOST_CHECK(banned_until.get_int64()-now <= 200);
 
@@ -306,6 +309,53 @@ BOOST_AUTO_TEST_CASE(rpc_ban)
     o1 = ar[0].get_obj();
     adr = find_value(o1, "address");
     BOOST_CHECK_EQUAL(adr.get_str(), "2001:4d48:ac57:400:cacf:e9ff:fe1d:9c63/128");
+}
+
+static std::string get_coinbaseaux_flags(UniValue blocktpl) {
+    UniValue aux = find_value(blocktpl.get_obj(), "coinbaseaux").get_obj();
+    std::string hexstr = find_value(aux.get_obj(), "flags").get_str();
+    std::vector<unsigned char> parsed = ParseHex(hexstr);
+    return std::string(parsed.begin(), parsed.end());
+}
+
+// Put us in a state where we accept rpc calls.
+class RpcMineState {
+public:
+    RpcMineState()
+    {
+        // Don't throw "Bitcoin is downloading blocks"
+        fForceInitialBlockDownload = true;
+
+        // Don't throw "Bitcoin is not connected"
+        LOCK(cs_vNodes);
+        assert(vNodes.empty());
+        vNodes.push_back(new CNode(INVALID_SOCKET, CAddress()));
+
+    }
+    ~RpcMineState() {
+        fForceInitialBlockDownload = false;
+
+        LOCK(cs_vNodes);
+        delete vNodes[0];
+        vNodes.clear();
+    }
+};
+
+BOOST_AUTO_TEST_CASE(rpc_getblocktemplate_vote)
+{
+    RpcMineState raii;
+
+    mapArgs.erase("-maxblocksizevote");
+    UniValue noVote = CallRPC("getblocktemplate");
+    std::string f = get_coinbaseaux_flags(noVote);
+    BOOST_CHECK(f.find("/BIP100/EB1/") != std::string::npos);
+    BOOST_CHECK(f.find("/B1/") == std::string::npos);
+
+    SoftSetArg("-maxblocksizevote", "16");
+    UniValue hasVote = CallRPC("getblocktemplate");
+    f = get_coinbaseaux_flags(hasVote);
+    BOOST_CHECK(f.find("/BIP100/B16/EB1/") != std::string::npos);
+
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -11,6 +11,7 @@
 #include "utilstrencodings.h"
 #include "utilmoneystr.h"
 #include "test/test_bitcoin.h"
+#include "consensus/consensus.h"
 
 #include <stdint.h>
 #include <vector>
@@ -419,9 +420,15 @@ BOOST_AUTO_TEST_CASE(test_FormatSubVersion)
     std::vector<std::string> comments2;
     comments2.push_back(std::string("comment1"));
     comments2.push_back(SanitizeString(std::string("Comment2; .,_?@-; !\"#$%&'()*+/<=>[]\\^`{|}~"), SAFE_CHARS_UA_COMMENT)); // Semicolon is discouraged but not forbidden by BIP-0014
-    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, std::vector<std::string>()),std::string("/Test:0.9.99/"));
-    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, comments),std::string("/Test:0.9.99(comment1)/"));
-    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, comments2),std::string("/Test:0.9.99(comment1; Comment2; .,_?@-; )/"));
+    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, std::vector<std::string>(), 0),std::string("/Test:0.9.99/"));
+    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, comments, 0),std::string("/Test:0.9.99(comment1)/"));
+    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, comments2, 0),std::string("/Test:0.9.99(comment1; Comment2; .,_?@-; )/"));
+
+    // BIP100
+    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, std::vector<std::string>(), MAX_BLOCK_SIZE),std::string("/Test:0.9.99(BIP100; EB1)/"));
+    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, comments, MAX_BLOCK_SIZE),std::string("/Test:0.9.99(comment1; BIP100; EB1)/"));
+    BOOST_CHECK_EQUAL(FormatSubVersion("Test", 99900, comments, MAX_BLOCK_SIZE + (MAX_BLOCK_SIZE / 3)),
+            std::string("/Test:0.9.99(comment1; BIP100; EB1.333333)/"));
 }
 
 BOOST_AUTO_TEST_CASE(test_ParseFixedPoint)

@@ -14,6 +14,7 @@
 #include "consensus/validation.h"
 #include "hash.h"
 #include "main.h"
+#include "maxblocksize.h"
 #include "net.h"
 #include "policy/policy.h"
 #include "pow.h"
@@ -28,6 +29,8 @@
 #include <boost/thread.hpp>
 #include <boost/tuple/tuple.hpp>
 #include <queue>
+#include <iomanip>
+#include <cmath>
 
 using namespace std;
 
@@ -71,6 +74,23 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
     return nNewTime - nOldTime;
 }
 
+// BIP100 string:
+// - Adds our block size vote (B) if configured.
+// - Adds Excessive Block (EB) string. This announces how big blocks we currently accept.
+std::vector<unsigned char> BIP100Str(uint64_t hardLimit) {
+    uint64_t blockVote = GetArg("-maxblocksizevote", 0);
+
+    std::stringstream ss;
+    ss << "/BIP100/";
+    if (blockVote)
+        ss << "B" << blockVote << "/";
+    double dMaxBlockSize = double(hardLimit)/1000000;
+    ss << "EB" << std::setprecision(int(log10(dMaxBlockSize))+7) << dMaxBlockSize << "/";
+
+    const std::string s = ss.str();
+    return std::vector<unsigned char>(s.begin(), s.end());
+}
+
 CBlockTemplate* CreateNewBlock(const CChainParams& chainparams, const CScript& scriptPubKeyIn)
 {
     // Create new block
@@ -92,19 +112,20 @@ CBlockTemplate* CreateNewBlock(const CChainParams& chainparams, const CScript& s
     pblocktemplate->vTxSigOps.push_back(-1); // updated at end
 
     // Largest block you're willing to create:
-    unsigned int nBlockMaxSize = GetArg("-blockmaxsize", DEFAULT_BLOCK_MAX_SIZE);
-    // Limit to between 1K and MAX_BLOCK_SIZE-1K for sanity:
-    nBlockMaxSize = std::max((unsigned int)1000, std::min((unsigned int)(MAX_BLOCK_SIZE-1000), nBlockMaxSize));
+    uint64_t hardLimit = GetNextMaxBlockSize(chainActive.Tip(), chainparams.GetConsensus());
+    uint64_t nBlockMaxSize = GetArg("-blockmaxsize", hardLimit);
+    // Limit to between 1K and (hard limit - 1K) for sanity:
+    nBlockMaxSize = std::max((uint64_t)1000, std::min((hardLimit - 1000),  nBlockMaxSize));
 
     // How much of the block should be dedicated to high-priority transactions,
     // included regardless of the fees they pay
     unsigned int nBlockPrioritySize = GetArg("-blockprioritysize", DEFAULT_BLOCK_PRIORITY_SIZE);
-    nBlockPrioritySize = std::min(nBlockMaxSize, nBlockPrioritySize);
+    nBlockPrioritySize = std::min(nBlockMaxSize, (uint64_t)nBlockPrioritySize);
 
     // Minimum block size you want to create; block will be filled with free transactions
     // until there are no more or the block reaches this size:
     unsigned int nBlockMinSize = GetArg("-blockminsize", DEFAULT_BLOCK_MIN_SIZE);
-    nBlockMinSize = std::min(nBlockMaxSize, nBlockMinSize);
+    nBlockMinSize = std::min(nBlockMaxSize, (uint64_t)nBlockMinSize);
 
     // Collect memory pool transactions into the block
     CTxMemPool::setEntries inBlock;
@@ -224,9 +245,11 @@ CBlockTemplate* CreateNewBlock(const CChainParams& chainparams, const CScript& s
             if (!IsFinalTx(tx, nHeight, nLockTimeCutoff))
                 continue;
 
+            // TODO: with more complexity we could make the block bigger when
+            // sigop-constrained and sigop density in later megabytes is low
             unsigned int nTxSigOps = iter->GetSigOpCount();
-            if (nBlockSigOps + nTxSigOps >= MAX_BLOCK_SIGOPS) {
-                if (nBlockSigOps > MAX_BLOCK_SIGOPS - 2) {
+            if (nBlockSigOps + nTxSigOps >= MaxBlockSigops(nBlockSize)) {
+                if (nBlockSigOps > MaxBlockSigops(nBlockSize) - 2) {
                     break;
                 }
                 continue;
@@ -278,7 +301,7 @@ CBlockTemplate* CreateNewBlock(const CChainParams& chainparams, const CScript& s
 
         // Compute final coinbase transaction.
         txNew.vout[0].nValue = nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus());
-        txNew.vin[0].scriptSig = CScript() << nHeight << OP_0;
+        txNew.vin[0].scriptSig = CScript() << nHeight << BIP100Str(hardLimit) << OP_0;
         pblock->vtx[0] = txNew;
         pblocktemplate->vTxFees[0] = -nFees;
 
@@ -298,7 +321,7 @@ CBlockTemplate* CreateNewBlock(const CChainParams& chainparams, const CScript& s
     return pblocktemplate.release();
 }
 
-void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned int& nExtraNonce)
+void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned int& nExtraNonce, uint64_t nMaxBlockSize)
 {
     // Update nExtraNonce
     static uint256 hashPrevBlock;
@@ -310,7 +333,7 @@ void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned
     ++nExtraNonce;
     unsigned int nHeight = pindexPrev->nHeight+1; // Height first in coinbase required for block.version=2
     CMutableTransaction txCoinbase(pblock->vtx[0]);
-    txCoinbase.vin[0].scriptSig = (CScript() << nHeight << CScriptNum(nExtraNonce)) + COINBASE_FLAGS;
+    txCoinbase.vin[0].scriptSig = (CScript() << nHeight << BIP100Str(nMaxBlockSize) << CScriptNum(nExtraNonce)) + COINBASE_FLAGS;
     assert(txCoinbase.vin[0].scriptSig.size() <= 100);
 
     pblock->vtx[0] = txCoinbase;
@@ -425,7 +448,8 @@ void static BitcoinMiner(const CChainParams& chainparams)
                 return;
             }
             CBlock *pblock = &pblocktemplate->block;
-            IncrementExtraNonce(pblock, pindexPrev, nExtraNonce);
+            uint64_t hardLimit = GetNextMaxBlockSize(pindexPrev, chainparams.GetConsensus());
+            IncrementExtraNonce(pblock, pindexPrev, nExtraNonce, hardLimit);
 
             LogPrintf("Running BitcoinMiner with %u transactions in block (%u bytes)\n", pblock->vtx.size(),
                 ::GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION));

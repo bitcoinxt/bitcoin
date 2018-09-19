@@ -52,6 +52,7 @@ class TestNode(NodeConnCB):
         self.tx_request_map = {}
         self.block_reject_map = {}
         self.tx_reject_map = {}
+        self.inv_hash_ignore = []
 
         # When the pingmap is non-empty we're waiting for 
         # a response
@@ -77,14 +78,16 @@ class TestNode(NodeConnCB):
             conn.send_message(response)
 
     def on_getdata(self, conn, message):
-        [conn.send_message(r) for r in self.block_store.get_blocks(message.inv)]
-        [conn.send_message(r) for r in self.tx_store.get_transactions(message.inv)]
-
-        for i in message.inv:
-            if i.type == 1:
+        for idx, i in enumerate(message.inv):
+            if i.hash in self.inv_hash_ignore:
+                del message.inv[idx]
+            elif i.type == 1:
                 self.tx_request_map[i.hash] = True
             elif i.type == 2:
                 self.block_request_map[i.hash] = True
+
+        [conn.send_message(r) for r in self.block_store.get_blocks(message.inv)]
+        [conn.send_message(r) for r in self.tx_store.get_transactions(message.inv)]
 
     def on_inv(self, conn, message):
         self.lastInv = [x.hash for x in message.inv]
@@ -192,10 +195,10 @@ class TestManager(object):
             return all(node.verack_received for node in self.test_nodes)
         return wait_until(veracked, timeout=10)
 
-    def wait_for_pings(self, counter):
+    def wait_for_pings(self, counter, attempts=float('inf')):
         def received_pongs():
             return all(node.received_ping_response(counter) for node in self.test_nodes)
-        return wait_until(received_pongs)
+        return wait_until(received_pongs, attempts)
 
     # sync_blocks: Wait for all connections to request the blockhash given
     # then send get_headers to find out the tip of each node, and synchronize
@@ -217,7 +220,7 @@ class TestManager(object):
 
         # Send ping and wait for response -- synchronization hack
         [ c.cb.send_ping(self.ping_counter) for c in self.connections ]
-        self.wait_for_pings(self.ping_counter)
+        self.wait_for_pings(self.ping_counter, attempts=20)
         self.ping_counter += 1
 
     # Analogous to sync_block (see above)

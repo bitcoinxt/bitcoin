@@ -7,6 +7,8 @@
 #include "tinyformat.h"
 
 #include <string>
+#include <iomanip>
+#include <cmath>
 
 /**
  * Name of client reported in the 'version' message. Report the same name
@@ -94,8 +96,18 @@ std::string FormatFullVersion()
 /** 
  * Format the subversion field according to BIP 14 spec (https://github.com/bitcoin/bips/blob/master/bip-0014.mediawiki) 
  */
-std::string FormatSubVersion(const std::string& name, int nClientVersion, const std::vector<std::string>& comments)
+std::string FormatSubVersion(const std::string& name, int nClientVersion, std::vector<std::string> comments, uint64_t nMaxBlockSize)
 {
+    if (nMaxBlockSize) {
+        // Announce our excessive block acceptence.
+        comments.insert(comments.end(), std::string("BIP100"));
+
+        std::stringstream ss;
+        double dMaxBlockSize = static_cast<double>(nMaxBlockSize) / 1000000;
+        ss << "EB" << std::setprecision(static_cast<int>(std::log10(dMaxBlockSize))+7) << dMaxBlockSize;
+        comments.insert(comments.end(), ss.str());
+    }
+
     std::ostringstream ss;
     ss << "/";
     ss << name << ":" << FormatVersion(nClientVersion);

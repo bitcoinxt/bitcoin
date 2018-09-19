@@ -29,6 +29,7 @@
 
 class CAddrMan;
 class CScheduler;
+class CNetMessage;
 class CNode;
 
 namespace boost {
@@ -43,8 +44,6 @@ static const int TIMEOUT_INTERVAL = 20 * 60;
 static const unsigned int MAX_INV_SZ = 50000;
 /** The maximum number of new addresses to accumulate before announcing. */
 static const unsigned int MAX_ADDR_TO_SEND = 1000;
-/** Maximum length of incoming protocol messages (no message over 2 MiB is currently acceptable). */
-static const unsigned int MAX_PROTOCOL_MESSAGE_LENGTH = 2 * 1024 * 1024;
 /** Maximum length of strSubVer in `version` message */
 static const unsigned int MAX_SUBVERSION_LENGTH = 256;
 /** -listen default */
@@ -108,14 +107,19 @@ struct CombinerAll
     }
 };
 
-// Signals for message handling
+// Signals are used to communicate with higher-level code.
 struct CNodeSignals
 {
     boost::signals2::signal<int ()> GetHeight;
+    // register a handler for this signal to do sanity checks as the bytes of a message are being
+    // received. Note that the message may not be completely read (so this can be
+    // used to prevent DoS attacks using over-size messages).
+    boost::signals2::signal<bool (CNode*, const CNetMessage&), CombinerAll> SanityCheckMessages;
     boost::signals2::signal<bool (CNode*), CombinerAll> ProcessMessages;
     boost::signals2::signal<bool (CNode*), CombinerAll> SendMessages;
     boost::signals2::signal<void (NodeId, const CNode*)> InitializeNode;
     boost::signals2::signal<void (NodeId)> FinalizeNode;
+    boost::signals2::signal<int ()> GetMaxBlockSize;
 };
 
 
@@ -171,8 +175,8 @@ extern CCriticalSection cs_vAddedNodes;
 extern NodeId nLastNodeId;
 extern CCriticalSection cs_nLastNodeId;
 
-/** Subversion as sent to the P2P network in `version` messages */
-extern std::string strSubVersion;
+/** Comments in subversion sent to the P2P network in `version` messages */
+extern std::vector<std::string> vUAComments;
 
 struct LocalServiceInfo {
     int nScore;
